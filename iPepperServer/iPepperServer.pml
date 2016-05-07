@@ -5,7 +5,9 @@
         <BehaviorDescription name="behavior" src="iPepperServer" xar="behavior.xar" />
     </BehaviorDescriptions>
     <Dialogs />
-    <Resources />
+    <Resources>
+        <File name="icon" src="icon.png" />
+    </Resources>
     <Topics />
     <IgnoredPaths>
         <Path src=".metadata" />
