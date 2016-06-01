@@ -7,6 +7,8 @@
     <Dialogs />
     <Resources>
         <File name="icon" src="icon.png" />
+        <File name="" src=".DS_Store" />
+        <File name="" src="iPepperServer/.DS_Store" />
     </Resources>
     <Topics />
     <IgnoredPaths>

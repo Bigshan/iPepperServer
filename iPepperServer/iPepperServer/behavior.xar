@@ -333,7 +333,7 @@ class MyClass(GeneratedClass):
             walkY = walkY/167772160.0
             theta = theta/167772160.0
             frequency = frequency/167772160.0
-            self.motion.moveToward(walkX,walkY,theta, [["Frequency", frequency]])
+            self.motion.moveToward(walkX,walkY,theta)
         elif(self.msg.startswith('HeadMsg',0,16)):
             header,walkX,walkY,theta,frequency = struct.unpack("!16s4i",self.msg)
             walkX = walkX/167772160.0
