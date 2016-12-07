@@ -15,7 +15,7 @@
             <BehaviorLayer name="behavior_layer1">
                 <BehaviorKeyframe name="keyframe1" index="1">
                     <Diagram>
-                        <Box name="iPepperServer" id="2" localization="8" tooltip="version 1.0" x="533" y="214">
+                        <Box name="iPepperServer" id="1" localization="8" tooltip="version 2.0.0" x="329" y="320">
                             <bitmap>media/images/box/box-diagram.png</bitmap>
                             <script language="4">
                                 <content>
@@ -25,74 +25,144 @@
                             <Input name="onLoad" type="1" type_size="1" nature="0" inner="1" tooltip="Signal sent when diagram is loaded." id="1" />
                             <Input name="onStart" type="1" type_size="1" nature="2" inner="0" tooltip="Box behavior starts when a signal is received on this input." id="2" />
                             <Input name="onStop" type="1" type_size="1" nature="3" inner="0" tooltip="Box behavior stops when a signal is received on this input." id="3" />
-                            <Parameter name="waitTime" inherits_from_parent="0" content_type="2" value="1" default_value="1" min="0" max="5" tooltip="" id="4" />
                             <Timeline enable="1" fps="25" start_frame="1" end_frame="-1" size="-1">
                                 <BehaviorLayer name="ReqAndRes">
                                     <BehaviorKeyframe name="ReqAndRes" index="1">
                                         <Diagram>
-                                            <Box name="ReqAndRes" id="3" localization="8" tooltip="by shiqishan" x="182" y="235">
+                                            <Box name="GETServer" id="1" localization="8" tooltip="server" x="170" y="136">
                                                 <bitmap>media/images/box/box-diagram.png</bitmap>
                                                 <script language="4">
                                                     <content>
                                                         <![CDATA[import socket
-import struct
-import time
+import json
 class MyClass(GeneratedClass):
     def __init__(self):
         GeneratedClass.__init__(self)
         self.motion = ALProxy("ALMotion")
-        self.memory = ALProxy("ALMemory")
         self.managerProxy = ALProxy("ALBehaviorManager")
         self.tts = ALProxy("ALTextToSpeech")
+        self.memory = ALProxy("ALMemory")
+        self.RecvPort = 47331
+        self.sendPort = 47334
+        self.addrDic = {}
+        self.isRobotics = 0
+        self.isSelected = 0
         try:
             self.audio = ALProxy("ALAudioDevice")
-        except :
-            self.audio = ALProxy("ALAudioPlayer")
-        self.SendPort = 47366
-        self.RecvPort = 47369
-        self.threadtime = 0.5
+            self.isRobotics = 1
+        except Exception as e:
+            self.audio = None
+            self.isRobotics = 0
+        self.startSocket()
     def onLoad(self):
         self.bstart = True
-        self.config = False
+
     def onUnload(self):
         self.bstart = False
         self.sock.close()
+
+    def gotoState(self, p):
+        try:
+            self.getParentTimeline().goTo(p)
+        except:
+            self.gotoAndStopParent(p)
+
     def onInput_onStart(self):
-        self.startSocket()
+        self.getParentTimeline().pause()
         while(self.bstart):
             try:
-                self.msg,(self.addr, self.port) = self.sock.recvfrom( 20 )
-                self.msg_unpack()
-            except :
-                self.logger.info("req bug.....")
-            pass
+                data,(self.host,port) = self.sock.recvfrom( 1000)
+                recvDic = {}
+                try:
+                    recvDic = json_loads_byteified(data)
+                except Exception as e:
+                    self.logger.info("data:%s..json..error..%s",data,e)
+                try:
+                    header = recvDic["header"]
+                    if header == "iPepper-dksdjlkjd":
+                        recvPort = int(recvDic["recvPort"])
+                        self.sendPort = recvPort
+                        self.recvDicUnpack(recvDic)
+                except Exception as e:
+                    self.logger.info("%s..msg..unpack..error.%s",data,e)
+            except Exception as e:
+                self.logger.info("online..req..error..%s",e)
+
+    def sendData(self, p):
+        try:
+            data = {"header":"iPepper-dksdjlkjd"}
+            data.update(p)
+            self.sock.sendto(json.dumps(data,separators=(',',':')),(self.host,self.sendPort))
+        except Exception as e:
+            self.logger.info("send data..:%s error..%s",data,e)
     def onInput_onStop(self):
         self.onUnload()
+
     def startSocket(self):
-        self.desc = ('<broadcast>',self.SendPort)
         self.sock = socket.socket( socket.AF_INET, socket.SOCK_DGRAM )
         self.sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-        self.sock.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
-        self.sock.bind( ('',self.RecvPort))
-    def msg_unpack(self):
-        if self.msg == "BehaviorReq":
-            if self.config:
-                self.sendBehaviorMsg()
-        elif self.msg == "SettingsReq":
-            if self.config:
-                self.sendSettingsMsg()
-        elif self.msg == "ConfigON":
-            self.config = True
-            self.memory.insertData("PepperControlSelected",1)
-            self.output(1)
-        elif self.msg == "ConfigOFF":
-            self.config = False
-            self.memory.insertData("PepperControlSelected",0)
-            self.output(0)
-        else:
-            pass
-    def sendBehaviorMsg(self):
-        header = "BehaviorRes"
+        self.sock.bind(('',self.RecvPort))
+
+################################################
+    def recvDicUnpack(self, dic):
+        path = dic["path"]
+        tag = dic["tag"]
+        baseDic = {"tag":tag}
+        if path == "NC--robots-online":
+            outputDic = self.getOnlineDic(dic)
+            outputDic.update(baseDic)
+            self.sendData(outputDic)
+        elif path == "NC--behavior-all":
+            if self.isSelected:
+                outputDic = self.getBehaviorsDic(dic)
+                outputDic.update(baseDic)
+                self.sendData(outputDic)
+        elif path == "NC--settings-info":
+            if self.isSelected:
+                outputDic = self.getSettingsDic(dic)
+                outputDic.update(baseDic)
+                self.sendData(outputDic)
+        elif path == "NC--speech-setinfo":
+            if self.isSelected:
+                outputDic = self.getSpeechSetDic(dic)
+                outputDic.update(baseDic)
+                self.sendData(outputDic)
+        elif path == "NC--robots-config-on":
+            timediff = float(dic["timeDiff"])
+            localIP = dic["loaclIP"]
+            self.memory.insertData("iPepper-TimeDiff",timediff)
+            self.memory.insertData("iPepper-LocalIP",localIP)
+            self.isSelected = 1
+            self.sendData(baseDic)
+            self.gotoState(20)
+        elif path == "NC--robots-config-off":
+            self.isSelected = 0
+            self.gotoState(0)
+            self.sendData(baseDic)
+
+    def getOnlineDic(self, dic):
+        recvTime = dic["sendTime"]
+        timediff = time.time()-float(recvTime)
+        name = "Simulator"
+        version = ""
+        serverVersion = 36
+        batteryCharge = 0
+        if(self.isRobotics == 1):
+            try:
+                system = ALProxy("ALSystem")
+                name = system.robotName()
+                version = system.systemVersion()
+            except :
+                pass
+            try:
+                battery = ALProxy("ALBattery")
+                batteryCharge = battery.getBatteryCharge()
+            except :
+                pass
+        data = {"name":name,"version":version,"serverVersion":serverVersion,"isRobot":self.isRobotics,"battery":batteryCharge,"isSelected":self.isSelected,"timediff":round(timediff,3)}
+        return data
+
+    def getBehaviorsDic(self, dic):
         defaultList = self.managerProxy.getDefaultBehaviors()
         behaviorList = self.managerProxy.getInstalledBehaviors()
         runingList = self.managerProxy.getRunningBehaviors()
@@ -123,21 +193,21 @@ class MyClass(GeneratedClass):
                 behaviors += "$"
                 if len(behaviors) >7900:
                     break
-        robotInfo = struct.pack('!15s8000s',header,behaviors)
-        self.sock.sendto(robotInfo,(self.addr, self.port))
-    def sendSettingsMsg(self):
-        header = "SettingsRes"
+        data = {"behaviors":behaviors}
+        return data
+
+    def getSettingsDic(self, dic):
+        robotName = "Simulator"
         supportLanguage = ""
-        isHighVersion = 0
-        robotName = ""
+        version = ""
+        isHighVersion = 1
+        volume = 0
         stiffness = 0
-        try:
-            volume = self.audio.getOutputVolume()
-            isRobotics = 1
-        except:
-            volume = 0
-            isRobotics = 0
-        if(isRobotics == 1):
+        cpuT = 0
+        charging = 0
+        charge = 0
+        autoLife = "disabled"
+        if(self.isRobotics == 1):
             try:
                 volume = self.audio.getOutputVolume()
                 isWakeUp = self.motion.robotIsWakeUp()
@@ -148,138 +218,79 @@ class MyClass(GeneratedClass):
                 stiffness = 0
             try:
                 system = ALProxy("ALSystem")
-                isHighVersion = 1
                 robotName = system.robotName()
+                version = system.systemVersion()
             except :
                 pass
-        else:
-            volume = 0
-            stiffness = 0
+            try:
+                cpuT = self.memory.getData("Device/SubDeviceList/Head/Temperature/Sensor/Value")
+                if self.memory.getData("Device/SubDeviceList/Battery/Current/Sensor/Value") >0:
+                    charging = 1
+                charge =int(self.memory.getData("Device/SubDeviceList/Battery/Charge/Sensor/Value")*100)
+            except :
+                pass
+            try:
+                autonomousLife = ALProxy("ALAutonomousLife")
+                autoLife = autonomousLife.getState()
+            except :
+                pass
         currentLanguage = self.tts.getLanguage()
         languageList = self.tts.getAvailableLanguages()
+
         for i in languageList:
             supportLanguage += i
             supportLanguage += "$"
-            if len(supportLanguage) >360:
-                    break
-        robotInfo = struct.pack('!15s40s400s40s4h',header,currentLanguage,supportLanguage,robotName,isRobotics,isHighVersion,stiffness,volume)
-        self.sock.sendto(robotInfo,(self.addr, self.port))]]>
-</content>
-                                                </script>
-                                                <Input name="onLoad" type="1" type_size="1" nature="0" inner="1" tooltip="Signal sent when diagram is loaded." id="1" />
-                                                <Input name="onStart" type="1" type_size="1" nature="2" inner="0" tooltip="Box behavior starts when a signal is received on this input." id="2" />
-                                                <Input name="onStop" type="1" type_size="1" nature="3" inner="0" tooltip="Box behavior stops when a signal is received on this input." id="3" />
-                                                <Output name="output" type="2" type_size="1" nature="2" inner="0" tooltip="" id="4" />
-                                            </Box>
-                                            <Box name="GotoAction" id="2" localization="8" tooltip="Enter tooltip here" x="321" y="212">
-                                                <bitmap>media/images/box/box-diagram.png</bitmap>
-                                                <script language="4">
-                                                    <content>
-                                                        <![CDATA[class MyClass(GeneratedClass):
-    def __init__(self):
-        GeneratedClass.__init__(self)
-    def onLoad(self):
-        pass
-    def onUnload(self):
-        pass
-    def onInput_onStart(self, p):
-        self.gotoState(20*p)
-    def onInput_onStop(self):
-        self.onUnload()
-    def gotoState(self,p):
-        try:
-            self.getParentTimeline().goTo(p)
-        except: # if NAOqi < 1.14
-            self.gotoAndStopParent(p)]]>
-</content>
-                                                </script>
-                                                <Input name="onLoad" type="1" type_size="1" nature="0" inner="1" tooltip="Signal sent when diagram is loaded." id="1" />
-                                                <Input name="onStart" type="2" type_size="1" nature="1" inner="0" tooltip="Box behavior starts when a signal is received on this input." id="2" />
-                                                <Input name="onStop" type="1" type_size="1" nature="3" inner="0" tooltip="Box behavior stops when a signal is received on this input." id="3" />
-                                            </Box>
-                                            <Box name="OnlineInfo" id="4" localization="8" tooltip="by shiqishan" x="170" y="95">
-                                                <bitmap>media/images/box/box-diagram.png</bitmap>
-                                                <script language="4">
-                                                    <content>
-                                                        <![CDATA[import socket
-import struct
-import time
-class MyClass(GeneratedClass):
-    def __init__(self):
-        GeneratedClass.__init__(self)
-        self.motion = ALProxy("ALMotion")
-        self.memory = ALProxy("ALMemory")
-        try:
-            self.audio = ALProxy("ALAudioDevice")
-        except :
-            self.audio = ALProxy("ALAudioPlayer")
-        self.SendPort = 47361
-        self.RecvPort = 47361
-        self.threadtime = 0.5
-    def onLoad(self):
-        self.bstart = True
-        self.config = False
-    def onUnload(self):
-        self.bstart = False
-        self.sock.close()
-    def onInput_onStart(self):
-        self.stopTimelineParent()
-        self.memory.insertData("PepperControlSelected",0)
-        self.startSocket()
-        while(self.bstart):
-            try:
-                self.msg,(self.addr, self.port) = self.sock.recvfrom( 20 )
-                self.msg_unpack()
-            except :
-                self.logger.info("onlineInfo bug....")
-                pass
-    def onInput_onStop(self):
-        self.onUnload()
-    def startSocket(self):
-        self.desc = ('<broadcast>',self.SendPort)
-        self.sock = socket.socket( socket.AF_INET, socket.SOCK_DGRAM )
-        self.sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-        self.sock.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1)
-        self.sock.bind( ('',self.RecvPort))
-    def msg_unpack(self):
-        if self.msg == "OnlineReq":
-            self.sendOnlineMsg()
-        else:
-            pass
+        data = {"currentLanguage":currentLanguage,"supportLanguage":supportLanguage,"isRobot":self.isRobotics,"name":robotName,"isHighVersion":isHighVersion,"stiffness":stiffness,"volume":volume,"CPUT":cpuT,"charging":charging,"charge":charge,"version":version,"autoLife":autoLife}
+        return data
 
-    def sendOnlineMsg(self):
-        header = "iPepperOnlineRes"
-        name = " "
-        version = " "
-        behaviorVersion = 10
-        batteryCharge = 0
-        header = header + str(behaviorVersion)
+    def getSpeechSetDic(self, dic):
+        bodyMode = 0
         try:
-            volume = self.audio.getOutputVolume()
-            isRobotics = 1
-        except:
-            isRobotics = 0
-        if(isRobotics == 1):
+            animSpeech = ALProxy('ALAnimatedSpeech')
+            bodyMode = animSpeech.getBodyLanguageMode()
+        except :
+            bodyMode = 0
+        supportLanguage = ""
+        volume = 0
+        if(self.isRobotics == 1):
             try:
-                system = ALProxy("ALSystem")
-                name = system.robotName()
-                version = system.systemVersion()
-                battery = ALProxy("ALBattery")
-                batteryCharge = battery.getBatteryCharge()
+                volume = self.tts.getVolume()*100
             except :
-                pass
-        isSelected = self.memory.getData("PepperControlSelected")
-        robotInfo = struct.pack('!25s20s10s4h',header,name,version,isRobotics,behaviorVersion,isSelected,batteryCharge)
-        self.sock.sendto(robotInfo,(self.addr, self.port))]]>
+                volume = 0
+        currentLanguage = self.tts.getLanguage()
+        languageList = self.tts.getAvailableLanguages()
+
+        for i in languageList:
+            supportLanguage += i
+            supportLanguage += "$"
+        data = {"currentLanguage":currentLanguage,"supportLanguage":supportLanguage,"volume":volume,"mode":bodyMode}
+        return data
+
+########################################################
+def json_loads_byteified(json_text):
+    return _byteify(
+        json.loads(json_text, object_hook=_byteify),
+        ignore_dicts=True
+    )
+
+def _byteify(data, ignore_dicts = False):
+    if isinstance(data, unicode):
+        return data.encode('utf-8')
+    if isinstance(data, list):
+        return [ _byteify(item, ignore_dicts=True) for item in data ]
+    if isinstance(data, dict) and not ignore_dicts:
+        return {
+            _byteify(key, ignore_dicts=True): _byteify(value, ignore_dicts=True)
+            for key, value in data.iteritems()
+        }
+    return data]]>
 </content>
                                                 </script>
                                                 <Input name="onLoad" type="1" type_size="1" nature="0" inner="1" tooltip="Signal sent when diagram is loaded." id="1" />
                                                 <Input name="onStart" type="1" type_size="1" nature="2" inner="0" tooltip="Box behavior starts when a signal is received on this input." id="2" />
                                                 <Input name="onStop" type="1" type_size="1" nature="3" inner="0" tooltip="Box behavior stops when a signal is received on this input." id="3" />
                                             </Box>
-                                            <Link inputowner="3" indexofinput="2" outputowner="0" indexofoutput="1" />
-                                            <Link inputowner="2" indexofinput="2" outputowner="3" indexofoutput="4" />
-                                            <Link inputowner="4" indexofinput="2" outputowner="0" indexofoutput="1" />
+                                            <Link inputowner="1" indexofinput="2" outputowner="0" indexofoutput="1" />
                                         </Diagram>
                                     </BehaviorKeyframe>
                                 </BehaviorLayer>
@@ -289,13 +300,15 @@ class MyClass(GeneratedClass):
                                     </BehaviorKeyframe>
                                     <BehaviorKeyframe name="Selection_on" index="20">
                                         <Diagram>
-                                            <Box name="Behavior Cilent" id="3" localization="8" tooltip="Behavior Cilent by shiqishan" x="324" y="41">
+                                            <Box name="POSTServer" id="3" localization="8" tooltip=" by shiqishan" x="321" y="95">
                                                 <bitmap>media/images/box/box-diagram.png</bitmap>
                                                 <script language="4">
                                                     <content>
                                                         <![CDATA[import socket
-import struct
 import time
+import json
+import sys
+import threading
 class MyClass(GeneratedClass):
     def __init__(self):
         GeneratedClass.__init__(self)
@@ -304,40 +317,78 @@ class MyClass(GeneratedClass):
         self.postureProxy = ALProxy("ALRobotPosture")
         self.managerProxy = ALProxy("ALBehaviorManager")
         self.tts = ALProxy("ALTextToSpeech")
-        self.SendPort = 47366
-        self.RecvPort = 47368
-        self.threadtime = 0.02
+        self.RecvPort = 47333
+        self.sendPort = 47334
+        self.notiTag = 70000000
+        self.ncid = ""
+        self.ip = ""
         self.startSocket()
+        reload(sys)
+        sys.setdefaultencoding('utf-8')
     def onLoad(self):
         self.bstart = True
         self.stifness_tem = 3
+        self.timeIds = []
     def onUnload(self):
         self.bstart = False
     def onInput_onStart(self):
-        self.waitYime = self.getParameter("waitTime")
+        self.tags = []
         while(self.bstart):
-            self.msg,(self.addr, self.port) = self.sock.recvfrom( 500 )
-            self.msg_unpack()
-            time.sleep(self.threadtime)
+            try:
+                data,(self.host,port) = self.sock.recvfrom( 1600)
+                recvDic = {}
+                try:
+                    recvDic = json_loads_byteified(data)
+                except Exception as e:
+                    self.logger.info("data:%s..json..error..%s",data,e)
+                if self.ip == "":
+                    self.ip = self.memory.getData("iPepper-LocalIP")
+                try:
+                    header = recvDic["header"]
+                    targets = recvDic["targets"]
+                    if header == "iPepper-dksdjlkjd" and targets.count(self.ip):
+                        recvPort = int(recvDic["recvPort"])
+                        self.sendPort = recvPort
+                        self.recvDicUnpack(recvDic)
+                except Exception as e:
+                    self.logger.info("%s..msg..unpack..error.%s",data,e)
+            except Exception as e:
+                self.logger.info("post..req..error..%s",e)
     def onInput_onStop(self):
         self.onUnload()
         self.sock.close()
     def startSocket(self):
         self.sock = socket.socket( socket.AF_INET, socket.SOCK_DGRAM )
         self.sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-        self.sock.bind( ('',self.RecvPort))
-    def msg_unpack(self):
-        if(self.msg.startswith('WalkMsg',0,16)):
-            header,walkX,walkY,theta,frequency = struct.unpack("!16s4i",self.msg)
-            walkX = walkX/167772160.0
-            walkY = walkY/167772160.0
-            theta = theta/167772160.0
-            frequency = frequency/167772160.0
+        self.sock.bind(('',self.RecvPort))
+    def recvDicUnpack(self, dic):
+        path = dic["path"]
+        tag = dic["tag"]
+        ncid = dic["ncid"]
+
+        if self.ncid != ncid:
+            self.tags = []
+            self.ncid = ncid
+
+        if self.tags.count(tag) >=1 :
+            self.sendData({"tag":tag})
+            return
+        if(path == "NC--notification-on"):
+            pass
+        elif(path == "NC--notification-off"):
+            pass
+        elif(path == "NC--motion-walk"):
+            if int(tag) >= 10000000:
+                self.sendData({"tag":tag})
+            walkX = int(dic["x"])/10.0
+            walkY = int(dic["y"])/10.0
+            theta = int(dic["thera"])/10.0
+            frequency = int(dic["frequency"])/10.0
             self.motion.moveToward(walkX,walkY,theta)
-        elif(self.msg.startswith('HeadMsg',0,16)):
-            header,walkX,walkY,theta,frequency = struct.unpack("!16s4i",self.msg)
-            walkX = walkX/167772160.0
-            walkY = walkY/167772160.0
+
+        elif(path == "NC--motion-head"):
+            walkX = int(dic["x"])/10.0
+            walkY = int(dic["y"])/10.0
             currentYaw = self.motion.getAngles("HeadYaw",False)
             currentPitch = self.motion.getAngles("HeadPitch",False)
             if(walkX>0 and currentPitch[0]<=0.326):
@@ -348,113 +399,250 @@ class MyClass(GeneratedClass):
                 self.motion.changeAngles("HeadYaw",walkY,0.2)
             if(walkY<=0 and currentYaw[0]>=-2.07):
                 self.motion.changeAngles("HeadYaw",walkY,0.2)
-        elif(self.msg.startswith('PostureMsg',0,16)):
-            header,info = struct.unpack("!16s16s",self.msg)
-            posture = self.getString(info)
+        elif(path == "NC--motion-posture"):
+            posture = dic["posture"]
+            self.sendData({"tag":tag})
+            self.tags.append(tag)
             self.postureProxy.setMaxTryNumber(2)
-            result = self.postureProxy.goToPosture(posture,0.6)
-        elif(self.msg.startswith('SpeechMsg',0,16)):
-            header,info1,info2 = struct.unpack("!16s20s412s",self.msg)
-            targetIP = self.getString(info1)
-            content = self.getString(info2)
-            self.sock.sendto(struct.pack('!16s20s',"SpeechMsg",targetIP),(self.addr,self.SendPort))
-            self.outputText(content)
-        elif(self.msg.startswith('SettingsMsg',0,16)):
-            header,info1,info2,info3 = struct.unpack("!16s20s20s40s",self.msg)
-            targetIP = self.getString(info1)
-            body = self.getString(info2)
-            value = self.getString(info3)
-            if(body == "Stiffness"):
-                if (float(value) > 0):
+            result = self.postureProxy.goToPosture(posture,0.7)
+        elif(path == "NC--behavior-single"):
+            self.sendData({"tag":tag})
+            self.tags.append(tag)
+            command = dic["command"]
+            behavior = dic["behavior"]
+            if(command == "start"):
+                self.managerProxy.post.runBehavior(behavior)
+            elif(command == "stop"):
+                if (self.managerProxy.isBehaviorRunning(behavior)):
+                    self.managerProxy.stopBehavior(behavior)
+            elif(command == "add"):
+                self.managerProxy.addDefaultBehavior(behavior)
+            elif(command == "remove"):
+                self.managerProxy.removeDefaultBehavior(behavior)
+        elif(path == "NC--behavior-sync"):
+            command = dic["command"]
+            behavior = dic["behavior"]
+            if(command == "start"):
+                timeDiff = self.memory.getData("iPepper-TimeDiff")
+                deny = 0.0
+                try:
+                    timedic = dic["timeDic"]
+                    deny = float(timedic[self.ip])
+                except :
+                    pass
+                runtime = float(dic["runtime"])+timeDiff - time.time()+deny
+                if runtime >=0:
+                    behaviorStart(runtime,behavior)
+                    self.managerProxy.preloadBehavior(behavior)
+                else:
+                    self.managerProxy.post.runBehavior(behavior)
+
+            elif(command == "stop"):
+                if (self.managerProxy.isBehaviorRunning(behavior)):
+                    self.managerProxy.stopBehavior(behavior)
+
+            self.sendData({"tag":tag})
+            self.tags.append(tag)
+
+        elif(path == "NC--speech-speech"):
+            self.sendData({"tag":tag})
+            self.tags.append(tag)
+            message = dic["message"]
+            self.outputText(message)
+        elif(path == "NC--settings-set"):
+            self.sendData({"tag":tag})
+            self.tags.append(tag)
+            key = dic["key"]
+            value = dic["value"]
+            if(key == "stiffness"):
+                if float(value) > 0:
                     self.motion.wakeUp()
                 else:
                     self.motion.rest()
-            elif(body == "Volume"):
+            elif(key == "volume"):
                 try:
                     audio = ALProxy("ALAudioDevice")
                     audio.setOutputVolume(int(value))
                 except:
                     pass
-            elif(body == "Language"):
-                self.tts.setLanguage(value)
-            elif(body == "RobotName"):
+            elif(key == "speechVolume"):
+                self.tts.setVolume(int(value)/100.0)
+            elif(key == "speechAnimated"):
                 try:
-                    system = ALProxy("ALSystem")
-                    system.setRobotName(value)
-                    count = 0
-                    while(count<=3):
-                        time.sleep(0.9)
-                        count += 1
-                        if (system.robotName()==value):
-                            self.sock.sendto(struct.pack('!16s20s',"NameConfirm",targetIP),(self.addr,self.SendPort))
-                            break
+                    animSpeech = ALProxy('ALAnimatedSpeech')
+                    animSpeech.setBodyLanguageMode(int(value))
                 except:
                     pass
-            elif(body == "System"):
+            elif(key == "language"):
+                self.tts.setLanguage(value)
+            elif(key == "autoLife"):
+                try:
+                    autonomousLife = ALProxy("ALAutonomousLife")
+                    autonomousLife.setState(value)
+                except:
+                    pass
+            elif(key == "system"):
                 try:
                     system = ALProxy("ALSystem")
-                    if(value == "reboot"):
+                    if(value == "Reboot"):
                         system.reboot()
-                    elif(value == "shutdown"):
+                    elif(value == "Shut Down"):
                         system.shutdown()
                 except:
                     pass
-        elif(self.msg.startswith('BehaviorMsg',0,16)):
-            header,info1,info2,info3 = struct.unpack("!16s20s20s100s",self.msg)
-            targetIP = self.getString(info1)
-            body = self.getString(info2)
-            behavior = self.getString(info3)
-            if(body == "start"):
-                if (targetIP == "255.255.255.255"):
-                    self.managerProxy.preloadBehavior(behavior)
-                    time.sleep(self.waitYime)
-                self.managerProxy.post.runBehavior(behavior)
-                if (targetIP != "255.255.255.255"):
-                    count = 0
-                    while(count <= 10):
-                        time.sleep(0.5)
-                        count += 1
-                        if (self.managerProxy.isBehaviorRunning(behavior)):
-                            self.sock.sendto(struct.pack('!16s20s20s100s',"BehaviorMsg",targetIP,body,behavior),(self.addr,self.SendPort))
-                            break
-            elif(body == "stop"):
-                if (self.managerProxy.isBehaviorRunning(behavior)):
-                    self.managerProxy.stopBehavior(behavior)
-                    if (targetIP != "255.255.255.255"):
-                        count = 0
-                        while(count <= 10):
-                            time.sleep(0.5)
-                            count += 1
-                            if not(self.managerProxy.isBehaviorRunning(behavior)):
-                                self.sock.sendto(struct.pack('!16s20s20s100s',"BehaviorMsg",targetIP,body,behavior),(self.addr,self.SendPort))
-                                break
-            elif(body == "stopall"):
-                self.managerProxy.stopAllBehaviors()
-                time.sleep(1.0)
-                if (targetIP != "255.255.255.255"):
-                    self.sock.sendto(struct.pack('!16s20s20s100s',"BehaviorMsg",targetIP,body,behavior),(self.addr,self.SendPort))
-            elif(body == "add"):
-                self.managerProxy.addDefaultBehavior(behavior)
-            elif(body == "remove"):
-                self.managerProxy.removeDefaultBehavior(behavior)
         else:
             pass
-    def getString(self,p):
-        string = []
-        string = p.split('*|')
-        if len(string)>0:
-            return string[0]
-        else:
-            return ""]]>
+
+    def sendData(self, p):
+        try:
+            data = {"header":"iPepper-dksdjlkjd"}
+            data.update(p)
+            self.sock.sendto(json.dumps(data,separators=(',',':')),(self.host,self.sendPort))
+        except Exception as e:
+            self.logger.info("send data..:%s error..%s",p,e)
+
+    def sendNotification(self, p):
+        try:
+            data = {"header":"iPepper-dksdjlkjd","tag":self.notiTag}
+            data.update(p)
+            self.sock.sendto(json.dumps(data,separators=(',',':')),(self.host,self.sendPort))
+            self.notiTag = self.notiTag+1
+        except Exception as e:
+            self.logger.info("send notification..:%s error..%s",p,e)
+
+    def onInput_sendBehaviorNotification(self, p):
+        key = "Notification--BehaviorsRun"
+        runingBehaviors = ""
+        for i in p:
+            if i.count(".currentChoregrapheBehavior"):
+                pass
+            elif i.count(".lastUploadedChoregrapheBehavior"):
+                pass
+            elif i.count("animation"):
+                pass
+            elif i.count("default"):
+                pass
+            elif i.count("boot-config"):
+                pass
+            elif i.count("diagnostic"):
+                pass
+            else:
+                runingBehaviors += i
+                runingBehaviors += "$"
+                if len(runingBehaviors) >7900:
+                    break
+        data = {"notikey":key,"runBehaviors":runingBehaviors}
+        self.sendNotification(data)
+#####################################################
+def behaviorStart(t, behavior):
+    th=threading.Timer(t,runBehavior,[behavior])
+    th.start()
+def runBehavior(behavior):
+    managerProxy = ALProxy("ALBehaviorManager")
+    managerProxy.post.runBehavior(behavior)
+########################################################
+def json_loads_byteified(json_text):
+    return _byteify(
+        json.loads(json_text, object_hook=_byteify),
+        ignore_dicts=True
+    )
+
+def _byteify(data, ignore_dicts = False):
+    if isinstance(data, unicode):
+        return data.encode('utf-8')
+    if isinstance(data, list):
+        return [ _byteify(item, ignore_dicts=True) for item in data ]
+    if isinstance(data, dict) and not ignore_dicts:
+        return {
+            _byteify(key, ignore_dicts=True): _byteify(value, ignore_dicts=True)
+            for key, value in data.iteritems()
+        }
+    return data]]>
 </content>
                                                 </script>
                                                 <Input name="onLoad" type="1" type_size="1" nature="0" inner="1" tooltip="Signal sent when diagram is loaded." id="1" />
                                                 <Input name="onStart" type="1" type_size="1" nature="2" inner="0" tooltip="Box behavior starts when a signal is received on this input." id="2" />
-                                                <Input name="onStop" type="1" type_size="1" nature="3" inner="0" tooltip="Box behavior stops when a signal is received on this input." id="3" />
-                                                <Output name="outputText" type="3" type_size="1" nature="2" inner="0" tooltip="" id="4" />
-                                                <Parameter name="waitTime" inherits_from_parent="1" content_type="2" value="1" default_value="1" min="0" max="5" tooltip="" id="5" />
+                                                <Input name="sendBehaviorNotification" type="0" type_size="1" nature="1" inner="0" tooltip="" id="3" />
+                                                <Input name="onStop" type="1" type_size="1" nature="3" inner="0" tooltip="Box behavior stops when a signal is received on this input." id="4" />
+                                                <Output name="outputText" type="3" type_size="1" nature="2" inner="0" tooltip="" id="5" />
                                             </Box>
-                                            <Box name="Say Text" id="2" localization="8" tooltip="Say the text received on its input." x="493" y="34">
+                                            <Box name="Subscribe to Event" id="5" localization="8" tooltip="Subscribes to a signal on a NAOqi2 service, or an event in NAOqi&apos;s shared memory&#x0A;When subscribed, the output will be triggered every time the signal is emitted or the event is raised." x="150" y="139">
+                                                <bitmap>media/images/box/sensors/STM.png</bitmap>
+                                                <script language="4">
+                                                    <content>
+                                                        <![CDATA[class MyClass(GeneratedClass):
+    def __init__(self):
+        GeneratedClass.__init__(self)
+        pass
+
+    def onLoad(self):
+        import threading
+        self.lock = threading.RLock()
+        self.signal = None
+        self.linkId = -1
+
+    def onUnload(self):
+        with self.lock:
+            self.unsubscribe()
+
+    def onInput_onStart(self):
+        with self.lock:
+            self.unsubscribe()
+            event = self.getParameter("event")
+
+            if(len(event) == 0):
+                return
+
+            params = event.split(".")
+            if(len(params) == 2):
+                try:
+                    self.signal = getattr(self.session().service(params[0]), params[1])
+                except Exception as e:
+                    mem = self.session().service("ALMemory")
+                    if(event in mem.getEventList()):
+                        self.signal = mem.subscriber(event).signal
+                    else:
+                        return
+            else:
+                try:
+                    self.signal = self.session().service("ALMemory").subscriber(event).signal
+                    self.linkId = self.signal.connect(self.reemitSignal)
+                except Exception as e:
+                    pass
+
+
+
+    def onInput_onStop(self):
+        with self.lock:
+            self.unsubscribe()
+            self.onStopped()
+
+    def unsubscribe(self):
+        if(self.signal is not None and self.linkId != -1):
+            self.signal.disconnect(self.linkId)
+
+        del self.signal
+        self.signal = None
+        self.linkId = -1
+
+    def reemitSignal(self, *args):
+        if(len(args) == 0):
+            self.onEvent()
+        elif(len(args) == 1):
+            self.onEvent(args[0])
+        else:
+            self.onEvent(args)]]>
+</content>
+                                                </script>
+                                                <Input name="onLoad" type="1" type_size="1" nature="0" inner="1" tooltip="Signal sent when diagram is loaded." id="1" />
+                                                <Input name="onStart" type="1" type_size="1" nature="2" inner="0" tooltip="When this input is activated, the box will try to subscribe to the signal or the event passed in the box parameter.&#x0A;&#x0A;If it is retriggered and the parameter has changed, the box will undo the previous subscription and subscribe to the new signal or the new event." id="2" />
+                                                <Input name="onStop" type="1" type_size="1" nature="3" inner="0" tooltip="Stop the box and cancel the subscription, if any." id="3" />
+                                                <Output name="onEvent" type="0" type_size="1" nature="2" inner="0" tooltip="This output is triggered each time the signal/event to which the box is connected is emitted/raised. It will carry the payload associated with the signal emission/event raise." id="4" />
+                                                <Output name="onStopped" type="1" type_size="1" nature="1" inner="0" tooltip="Signal sent when box behavior is finished." id="5" />
+                                                <Output name="onError" type="3" type_size="1" nature="1" inner="0" tooltip="This output is triggered when the box encounters an error, and contains the error message." id="6" />
+                                                <Parameter name="event" inherits_from_parent="0" content_type="3" value="BehaviorsRun" default_value="" custom_choice="0" tooltip='This parameter describes the signal to connect to, and the service advertising this signal.&#x0A;&#x0A;Use the pattern &quot;Service.Signal&quot; to connect to a signal, or the event key to connect to an event.' id="7" />
+                                            </Box>
+                                            <Box name="Animated Say Text" id="2" localization="8" tooltip="Say the text received on its input and move during its speech." x="483" y="102">
                                                 <bitmap>media/images/box/interaction/say.png</bitmap>
                                                 <script language="4">
                                                     <content>
@@ -463,8 +651,10 @@ class MyClass(GeneratedClass):
 class MyClass(GeneratedClass):
     def __init__(self):
         GeneratedClass.__init__(self, False)
-        self.tts = ALProxy('ALTextToSpeech')
-        self.ttsStop = ALProxy('ALTextToSpeech', True) #Create another proxy as wait is blocking if audioout is remote
+        try:
+            self.animSpeech = ALProxy('ALAnimatedSpeech')
+        except Exception as e:
+            self.animSpeech = ALProxy('ALTextToSpeech')
 
     def onLoad(self):
         self.bIsRunning = False
@@ -473,11 +663,9 @@ class MyClass(GeneratedClass):
     def onUnload(self):
         for id in self.ids:
             try:
-                self.ttsStop.stop(id)
+                self.animSpeech.stop(id)
             except:
                 pass
-        while( self.bIsRunning ):
-            time.sleep( 0.2 )
 
     def onInput_onStart(self, p):
         self.bIsRunning = True
@@ -486,9 +674,9 @@ class MyClass(GeneratedClass):
             sentence += "\VCT="+ str( self.getParameter("Voice shaping (%)") ) + "\ "
             sentence += str(p)
             sentence +=  "\RST\ "
-            id = self.tts.post.say(str(sentence))
+            id = self.animSpeech.post.say(str(sentence))
             self.ids.append(id)
-            self.tts.wait(id, 0)
+            self.animSpeech.wait(id, 0)
         finally:
             try:
                 self.ids.remove(id)
@@ -510,13 +698,15 @@ class MyClass(GeneratedClass):
                                                 <Parameter name="Speed (%)" inherits_from_parent="1" content_type="1" value="100" default_value="100" min="50" max="200" tooltip="Changes the speed of the voice.&#x0A;&#x0A;Note: For a better effect, you can compensate this parameter with the voice&#x0A;shaping parameter. For example, if you want to increase by 20% the speed, you&#x0A;will have to decrease by 20% the voice shaping to keep a constant average&#x0A;speed." id="6" />
                                             </Box>
                                             <Link inputowner="3" indexofinput="2" outputowner="0" indexofoutput="1" />
-                                            <Link inputowner="2" indexofinput="2" outputowner="3" indexofoutput="4" />
+                                            <Link inputowner="5" indexofinput="2" outputowner="0" indexofoutput="1" />
+                                            <Link inputowner="3" indexofinput="3" outputowner="5" indexofoutput="4" />
+                                            <Link inputowner="2" indexofinput="2" outputowner="3" indexofoutput="5" />
                                         </Diagram>
                                     </BehaviorKeyframe>
                                 </BehaviorLayer>
                             </Timeline>
                         </Box>
-                        <Link inputowner="2" indexofinput="2" outputowner="0" indexofoutput="2" />
+                        <Link inputowner="1" indexofinput="2" outputowner="0" indexofoutput="2" />
                     </Diagram>
                 </BehaviorKeyframe>
             </BehaviorLayer>

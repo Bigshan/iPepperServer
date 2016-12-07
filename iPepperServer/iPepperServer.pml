@@ -7,7 +7,6 @@
     <Dialogs />
     <Resources>
         <File name="icon" src="icon.png" />
-        <File name="" src=".DS_Store" />
     </Resources>
     <Topics />
     <IgnoredPaths>
