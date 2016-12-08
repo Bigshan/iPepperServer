@@ -145,7 +145,7 @@ class MyClass(GeneratedClass):
         timediff = time.time()-float(recvTime)
         name = "Simulator"
         version = ""
-        serverVersion = 36
+        serverVersion = 20
         batteryCharge = 0
         if(self.isRobotics == 1):
             try:
